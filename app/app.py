@@ -6,6 +6,8 @@ import sys
 from flask import Flask, request
 from flask.logging import default_handler
 from prometheus_flask_exporter import PrometheusMetrics
+from random import random
+from time import sleep
 
 try:
     _, greeting = sys.argv
@@ -23,6 +25,7 @@ metrics = PrometheusMetrics(app)
 
 @app.route('/')
 def index():
+    sleep(random() * 5)
     app.logger.info(greeting)
     return greeting
 
