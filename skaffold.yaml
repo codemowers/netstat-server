@@ -1,20 +1,15 @@
 apiVersion: skaffold/v3
 kind: Config
 metadata:
-  name: hello-flask
+  name: netstat-server
 
 deploy:
   kubectl: {}
 
 manifests:
   rawYaml:
-     - deployment.yaml
+     - daemonset.yaml
 
 build:
   artifacts:
-  - image: hello-flask
-
-  # Comment following lines below to build locally
-  cluster:
-    dockerConfig:
-      secretName: kaniko
+  - image: netstat-server

@@ -1,0 +1,78 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: netstat-server
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: netstat-server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: netstat-server
+subjects:
+- kind: ServiceAccount
+  name: netstat-server
+  namespace: laurivosandi-jctkx
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: netstat-server
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: netstat-server
+spec:
+  selector:
+    matchLabels:
+      app: netstat-server
+  template:
+    metadata:
+      labels:
+        app: netstat-server
+    spec:
+      serviceAccountName: netstat-server
+      enableServiceLinks: false
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: netstat-server
+          image: netstat-server
+          securityContext:
+            privileged: true
+          env:
+            - name: PATH_PROCFS
+              value: /host/proc
+          ports:
+            - containerPort: 3001
+              name: http
+          volumeMounts:
+            - name: proc
+              mountPath: /host/proc/
+      securityContext:
+        runAsUser: 0
+      volumes:
+      - name: proc
+        hostPath:
+          path: /proc/
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: netstat-server
+  labels:
+    app: netstat-server
+spec:
+  selector:
+    app: netstat-server
+  ports:
+  - protocol: TCP
+    port: 8000
