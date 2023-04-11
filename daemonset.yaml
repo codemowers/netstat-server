@@ -1,31 +1,4 @@
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: netstat-server
-rules:
-- apiGroups: [""]
-  resources: ["pods"]
-  verbs: ["list"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: netstat-server
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: netstat-server
-subjects:
-- kind: ServiceAccount
-  name: netstat-server
-  namespace: laurivosandi-jctkx
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: netstat-server
----
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -39,7 +12,6 @@ spec:
       labels:
         app: netstat-server
     spec:
-      serviceAccountName: netstat-server
       enableServiceLinks: false
       imagePullSecrets:
         - name: regcred
