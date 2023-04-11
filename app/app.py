@@ -65,7 +65,7 @@ async def export(request):
                     z["listening"].append((cid, lport, "TCP"))
                     continue
 
-                z["connections"].append((laddr, lport, raddr, rport, "TCP", state))
+                z["connections"].append((cid, lport, raddr, rport, "TCP", state))
     return json(z)
 
 
