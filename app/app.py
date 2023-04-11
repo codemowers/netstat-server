@@ -3,8 +3,6 @@ import struct
 import socket
 import re
 import os
-from kubernetes_asyncio import client, config
-from kubernetes_asyncio.client.api_client import ApiClient
 from sanic import Sanic
 from sanic.response import json
 
@@ -30,27 +28,25 @@ PATH_PROCFS = os.getenv("PATH_PROCFS", "/proc")
 
 @app.get("/export")
 async def export(request):
-    mapping = {"10.96.0.1": ("default", "kubernetes")}
-    async with ApiClient() as api:
-        v1 = client.CoreV1Api(api)
-        for pod in (await v1.list_namespaced_pod("")).items:
-            mapping[pod.status.pod_ip] = pod.metadata.namespace, pod.metadata.name
+    z = {
+        "connections": [],
+        "listening": [],
+    }
 
-    conns = []
-    hostns = os.readlink(os.path.join(PATH_PROCFS, "1/ns/net"))
     for j in os.listdir(PATH_PROCFS):
         try:
             pid = int(j)
         except ValueError:
             continue
-        try:
-            ns = os.readlink(os.path.join(PATH_PROCFS, "%d/ns/net" % pid))
-        except FileNotFoundError:
+        with open(os.path.join(PATH_PROCFS, "%d/cgroup" % pid), "r") as fh:
+            cgroup = fh.readline().strip()
+        _, cid = cgroup.rsplit("/", 1)
+        m = re.match(r"crio\-([0-9a-z]{64})\.scope", cid)
+        if not m:
             continue
-        if ns in conns:
-            continue
-        if ns == hostns:
-            continue
+        cid, = m.groups()
+        cid = "cri-o://%s" % cid
+
         with open(os.path.join(PATH_PROCFS, "%d/net/tcp" % pid), "r") as fh:
             fh.readline()
             for line in fh:
@@ -61,38 +57,16 @@ async def export(request):
                 lport, rport = int(lport, 16), int(rport, 16)
                 laddr = socket.inet_ntoa(struct.pack("<L", int(laddr, 16)))
                 raddr = socket.inet_ntoa(struct.pack("<L", int(raddr, 16)))
-                conns.append((laddr, lport, raddr, rport, state))
 
-    z = {
-        "connections": [],
-    }
-    for laddr, lport, raddr, rport, state in conns:
-        if laddr.startswith("127."):
-            continue
-        if laddr == "0.0.0.0":
-            continue
-        la = {"addr": laddr, "port": lport}
-        la["namespace"], la["pod"] = mapping.get(laddr)
-        if la["namespace"] == "longhorn-system":
-            continue
-        r = {"addr": raddr, "port": rport}
-        j = mapping.get(raddr)
-        if j:
-            r["namespace"], r["pod"] = j
-        z["connections"].append({
-            "state": state,
-            "local": la,
-            "remote": r,
-        })
+                if laddr.startswith("127."):
+                    continue
+                if state == "LISTEN":
+                    assert raddr == "0.0.0.0"
+                    z["listening"].append((cid, lport, "TCP"))
+                    continue
+
+                z["connections"].append((laddr, lport, raddr, rport, "TCP", state))
     return json(z)
-
-
-@app.listener("before_server_start")
-async def setup_db(app, loop):
-    if os.getenv("KUBECONFIG"):
-        await config.load_kube_config()
-    else:
-        config.load_incluster_config()
 
 
 app.run(host="0.0.0.0", port=3001, single_process=True, motd=False)
