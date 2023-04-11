@@ -51,12 +51,12 @@ async def export(request):
             continue
         if ns == hostns:
             continue
-        with open(os.path.join(PATH_PROCFS, "%d/net/tcp" % pid), "rb") as fh:
+        with open(os.path.join(PATH_PROCFS, "%d/net/tcp" % pid), "r") as fh:
             fh.readline()
             for line in fh:
                 cells = re.split(r"\s+", line)
-                laddr, lport = cells[2].split(b":")
-                raddr, rport = cells[3].split(b":")
+                laddr, lport = cells[2].split(":")
+                raddr, rport = cells[3].split(":")
                 state = STATES[int(cells[4], 16)]
                 lport, rport = int(lport, 16), int(rport, 16)
                 laddr = socket.inet_ntoa(struct.pack("<L", int(laddr, 16)))
