@@ -71,8 +71,10 @@ metadata:
   labels:
     app: netstat-server
 spec:
+  clusterIP: None
   selector:
     app: netstat-server
   ports:
   - protocol: TCP
-    port: 8000
+    port: 3001
+    name: http
