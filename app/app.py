@@ -38,8 +38,12 @@ async def export(request):
             pid = int(j)
         except ValueError:
             continue
-        with open(os.path.join(PATH_PROCFS, "%d/cgroup" % pid), "r") as fh:
-            cgroup = fh.readline().strip()
+        try:
+            with open(os.path.join(PATH_PROCFS, "%d/cgroup" % pid), "r") as fh:
+                cgroup = fh.readline().strip()
+        except FileNotFoundError:
+            # TODO: host namespace?
+            continue
         _, cid = cgroup.rsplit("/", 1)
         m = re.match(r"crio\-([0-9a-z]{64})\.scope", cid)
         if not m:
@@ -50,10 +54,10 @@ async def export(request):
         with open(os.path.join(PATH_PROCFS, "%d/net/tcp" % pid), "r") as fh:
             fh.readline()
             for line in fh:
-                cells = re.split(r"\s+", line)
-                laddr, lport = cells[2].split(":")
-                raddr, rport = cells[3].split(":")
-                state = STATES[int(cells[4], 16)]
+                cells = re.split(r"\s+", line.strip())
+                laddr, lport = cells[1].split(":")
+                raddr, rport = cells[2].split(":")
+                state = STATES[int(cells[3], 16)]
                 lport, rport = int(lport, 16), int(rport, 16)
                 laddr = socket.inet_ntoa(struct.pack("<L", int(laddr, 16)))
                 raddr = socket.inet_ntoa(struct.pack("<L", int(raddr, 16)))
