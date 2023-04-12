@@ -12,6 +12,7 @@ spec:
       labels:
         app: netstat-server
     spec:
+      hostNetwork: true
       enableServiceLinks: false
       imagePullSecrets:
         - name: regcred
