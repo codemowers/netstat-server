@@ -5,6 +5,10 @@ import re
 import os
 from sanic import Sanic
 from sanic.response import json
+from scapy.all import AsyncSniffer, DNS
+from lru import LRU
+
+reverse_lookup = LRU(10000)
 
 app = Sanic("netstat")
 
@@ -24,6 +28,11 @@ STATES = {
 }
 
 PATH_PROCFS = os.getenv("PATH_PROCFS", "/proc")
+
+
+@app.get("/reverse")
+async def reverse_lookup_table(request):
+    return json(reverse_lookup)
 
 
 @app.get("/export")
@@ -69,8 +78,24 @@ async def export(request):
                     z["listening"].append((cid, lport, "TCP"))
                     continue
 
-                z["connections"].append((cid, lport, raddr, rport, "TCP", state))
+                z["connections"].append((cid, lport, raddr, rport, "TCP", state, reverse_lookup.get(raddr)))
     return json(z)
 
+
+def process_packet(p):
+    if not p.haslayer(DNS):
+        return
+    if not p.an:
+        return
+    for an in p.an:
+        reverse_lookup[an.rdata] = an.rrname.decode("ascii").lower().rstrip(".")
+
+
+@app.listener("before_server_start")
+async def setup_db(app, loop):
+    sniffer = AsyncSniffer(prn=process_packet, filter="port 53", store=False)
+    sniffer.start()
+    sniffer2 = AsyncSniffer(iface="lo", prn=process_packet, filter="port 53", store=False)
+    sniffer2.start()
 
 app.run(host="0.0.0.0", port=3001, single_process=True, motd=False)

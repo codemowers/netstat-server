@@ -1,10 +1,7 @@
-FROM python:alpine AS build
-RUN apk add --no-cache gcc make musl-dev linux-headers git \
- && pip3 wheel --wheel-dir=/wheels \
-      sanic kubernetes_asyncio
-FROM python:alpine
-COPY --from=build /wheels /wheels
-RUN pip3 install --no-index /wheels/*.whl && rm -Rfv /wheels
+FROM ubuntu
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -yqq python3-scapy python3-pip
+RUN pip3 install sanic kubernetes_asyncio lru-dict
 LABEL name="codemowers/netstat-server" \
       version="rc" \
       maintainer="Lauri Võsandi <lauri@codemowers.io>"
