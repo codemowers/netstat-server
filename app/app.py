@@ -92,7 +92,11 @@ def process_packet(p):
     if not p.an:
         return
     for an in p.an:
-        reverse_lookup[an.rdata] = an.rrname.decode("ascii").lower().rstrip(".")
+        try:
+            if an.rdata:
+                reverse_lookup[an.rdata] = an.rrname.decode("ascii").lower().rstrip(".")
+        except AttributeError:
+            print("Failed to handle packet DNS answer:", an)
 
 
 @app.listener("before_server_start")
