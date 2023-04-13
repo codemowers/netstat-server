@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
+import asyncio
 import struct
 import socket
 import re
 import os
+from cachetools import TTLCache, LRUCache
 from sanic import Sanic
 from sanic.response import json
 from scapy.all import AsyncSniffer, DNS
-from lru import LRU
 
-reverse_lookup = LRU(10000)
+reverse_lookup = LRUCache(maxsize=10000)
+connections = TTLCache(maxsize=100000, ttl=60)
+listening = TTLCache(maxsize=1000000, ttl=60)
 
 app = Sanic("netstat")
 
@@ -50,46 +53,51 @@ def parse_cgroup(first_line):
 @app.get("/export")
 async def export(request):
     z = {
-        "connections": [],
-        "listening": [],
+        "reverse": dict(reverse_lookup),
+        "connections": [(k[0], k[1], k[2], k[3], k[4], v) for k, v in connections.items()],
+        "listening": [(k[0], k[1], k[2]) for k, v in listening.items()],
     }
-
-    for j in os.listdir(PATH_PROCFS):
-        try:
-            pid = int(j)
-        except ValueError:
-            continue
-        try:
-            with open(os.path.join(PATH_PROCFS, "%d/cgroup" % pid), "r") as fh:
-                cid = parse_cgroup(fh.readline().strip())
-        except FileNotFoundError:
-            # TODO: host namespace?
-            continue
-
-        try:
-            with open(os.path.join(PATH_PROCFS, "%d/net/tcp" % pid), "r") as fh:
-                fh.readline()
-                for line in fh:
-                    cells = re.split(r"\s+", line.strip())
-                    laddr, lport = cells[1].split(":")
-                    raddr, rport = cells[2].split(":")
-                    state = STATES[int(cells[3], 16)]
-                    lport, rport = int(lport, 16), int(rport, 16)
-                    laddr = socket.inet_ntoa(struct.pack("<L", int(laddr, 16)))
-                    raddr = socket.inet_ntoa(struct.pack("<L", int(raddr, 16)))
-
-                    if laddr.startswith("127."):
-                        continue
-                    if state == "LISTEN":
-                        assert raddr == "0.0.0.0"
-                        z["listening"].append((cid, lport, "TCP"))
-                        continue
-
-                    z["connections"].append((cid, lport, raddr, rport, "TCP", state, reverse_lookup.get(raddr)))
-        except FileNotFoundError:
-            # TODO: no network stack at all?
-            continue
     return json(z)
+
+
+async def poller():
+    while True:
+        for j in os.listdir(PATH_PROCFS):
+            try:
+                pid = int(j)
+            except ValueError:
+                continue
+            try:
+                with open(os.path.join(PATH_PROCFS, "%d/cgroup" % pid), "r") as fh:
+                    cid = parse_cgroup(fh.readline().strip())
+            except FileNotFoundError:
+                # TODO: host namespace?
+                continue
+
+            try:
+                with open(os.path.join(PATH_PROCFS, "%d/net/tcp" % pid), "r") as fh:
+                    fh.readline()
+                    for line in fh:
+                        cells = re.split(r"\s+", line.strip())
+                        laddr, lport = cells[1].split(":")
+                        raddr, rport = cells[2].split(":")
+                        state = STATES[int(cells[3], 16)]
+                        lport, rport = int(lport, 16), int(rport, 16)
+                        laddr = socket.inet_ntoa(struct.pack("<L", int(laddr, 16)))
+                        raddr = socket.inet_ntoa(struct.pack("<L", int(raddr, 16)))
+
+                        if laddr.startswith("127."):
+                            continue
+                        if state == "LISTEN":
+                            assert raddr == "0.0.0.0"
+                            listening[(cid, lport, "TCP")] = 1
+                            continue
+
+                        connections[(cid, lport, raddr, rport, "TCP")] = state
+            except FileNotFoundError:
+                # TODO: no network stack at all?
+                continue
+        await asyncio.sleep(30)
 
 
 def process_packet(p):
@@ -103,7 +111,6 @@ def process_packet(p):
         try:
             answer, query, answer_type = p[0][i].rdata, p[0][i].rrname, p[0][i].type
         except AttributeError:
-            print("Failed to parse response:", p[0][i])
             continue
         i -= 1
         if answer_type != 1:
@@ -116,6 +123,7 @@ def process_packet(p):
 
 @app.listener("before_server_start")
 async def setup_db(app, loop):
+    loop.create_task(poller())
     sniffer = AsyncSniffer(prn=process_packet, filter="port 53", store=False)
     sniffer.start()
     sniffer2 = AsyncSniffer(iface="lo", prn=process_packet, filter="port 53", store=False)
