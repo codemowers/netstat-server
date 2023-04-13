@@ -32,7 +32,7 @@ PATH_PROCFS = os.getenv("PATH_PROCFS", "/proc")
 
 @app.get("/reverse")
 async def reverse_lookup_table(request):
-    return json(reverse_lookup)
+    return json(dict(reverse_lookup))
 
 
 def parse_cgroup(first_line):
@@ -97,12 +97,21 @@ def process_packet(p):
         return
     if not p.an:
         return
-    for an in p.an:
+    a_count = p[DNS].ancount
+    i = a_count + 4
+    while i > 4:
         try:
-            if an.rdata:
-                reverse_lookup[an.rdata] = an.rrname.decode("ascii").lower().rstrip(".")
+            answer, query, answer_type = p[0][i].rdata, p[0][i].rrname, p[0][i].type
         except AttributeError:
-            print("Failed to handle packet DNS answer:", an)
+            print("Failed to parse response:", p[0][i])
+            continue
+        i -= 1
+        if answer_type != 1:
+            continue
+        hostname = query.decode("ascii").lower().rstrip(".")
+        if hostname.endswith(".local"):
+            continue
+        reverse_lookup[answer] = hostname
 
 
 @app.listener("before_server_start")
