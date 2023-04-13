@@ -35,6 +35,18 @@ async def reverse_lookup_table(request):
     return json(reverse_lookup)
 
 
+def parse_cgroup(first_line):
+    _, remainder = first_line.rsplit("/", 1)
+
+    m = re.match(r"crio\-([0-9a-z]{64})\.scope", remainder)
+    if m:
+        return "cri-o://%s" % m.groups()
+
+    m = re.match(r"cri\-containerd\-([0-9a-z]{64})\.scope", remainder)
+    if m:
+        return "containerd://%s" % m.groups()
+
+
 @app.get("/export")
 async def export(request):
     z = {
@@ -49,16 +61,10 @@ async def export(request):
             continue
         try:
             with open(os.path.join(PATH_PROCFS, "%d/cgroup" % pid), "r") as fh:
-                cgroup = fh.readline().strip()
+                cid = parse_cgroup(fh.readline().strip())
         except FileNotFoundError:
             # TODO: host namespace?
             continue
-        _, cid = cgroup.rsplit("/", 1)
-        m = re.match(r"crio\-([0-9a-z]{64})\.scope", cid)
-        if not m:
-            continue
-        cid, = m.groups()
-        cid = "cri-o://%s" % cid
 
         try:
             with open(os.path.join(PATH_PROCFS, "%d/net/tcp" % pid), "r") as fh:
