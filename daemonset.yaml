@@ -1,4 +1,15 @@
 ---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: netstat-server
+spec:
+  selector:
+    matchLabels:
+      app: netstat-server
+  podMetricsEndpoints:
+    - port: http
+---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:

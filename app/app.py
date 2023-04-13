@@ -7,7 +7,17 @@ import os
 from cachetools import TTLCache, LRUCache
 from sanic import Sanic
 from sanic.response import json
+from prometheus_client import Gauge, Histogram
+from sanic_prometheus import monitor
 from scapy.all import AsyncSniffer, DNS
+
+gauge_connections = Gauge("netstat_server_connection_count",
+    "Connection count")
+gauge_reverse_records = Gauge("netstat_server_reverse_record_count",
+    "Reverse lookup table record count")
+histogram_latency = Histogram("netstat_stage_latency_sec",
+    "Latency histogram",
+    ["stage"])
 
 reverse_lookup = LRUCache(maxsize=10000)
 connections = TTLCache(maxsize=100000, ttl=60)
@@ -60,50 +70,55 @@ async def export(request):
     return json(z)
 
 
+@histogram_latency.labels("poll-proc").time()
+async def poll_proc():
+    for j in os.listdir(PATH_PROCFS):
+        await asyncio.sleep(0)
+        try:
+            pid = int(j)
+        except ValueError:
+            continue
+        try:
+            with open(os.path.join(PATH_PROCFS, "%d/cgroup" % pid), "r") as fh:
+                cid = parse_cgroup(fh.readline().strip())
+        except FileNotFoundError:
+            # TODO: host namespace?
+            continue
+
+        try:
+            with open(os.path.join(PATH_PROCFS, "%d/net/tcp" % pid), "r") as fh:
+                fh.readline()
+                for line in fh:
+                    cells = re.split(r"\s+", line.strip())
+                    laddr, lport = cells[1].split(":")
+                    raddr, rport = cells[2].split(":")
+                    state = STATES[int(cells[3], 16)]
+                    lport, rport = int(lport, 16), int(rport, 16)
+                    laddr = socket.inet_ntoa(struct.pack("<L", int(laddr, 16)))
+                    raddr = socket.inet_ntoa(struct.pack("<L", int(raddr, 16)))
+
+                    if laddr.startswith("127."):
+                        continue
+                    if state == "LISTEN":
+                        assert raddr == "0.0.0.0"
+                        listening[(cid, lport, "TCP")] = 1
+                        continue
+
+                    connections[(cid, lport, raddr, rport, "TCP")] = state
+        except FileNotFoundError:
+            # TODO: no network stack at all?
+            continue
+    gauge_connections.set(len(connections))
+
+
 async def poller():
     while True:
-        for j in os.listdir(PATH_PROCFS):
-            try:
-                pid = int(j)
-            except ValueError:
-                continue
-            try:
-                with open(os.path.join(PATH_PROCFS, "%d/cgroup" % pid), "r") as fh:
-                    cid = parse_cgroup(fh.readline().strip())
-            except FileNotFoundError:
-                # TODO: host namespace?
-                continue
-
-            try:
-                with open(os.path.join(PATH_PROCFS, "%d/net/tcp" % pid), "r") as fh:
-                    fh.readline()
-                    for line in fh:
-                        cells = re.split(r"\s+", line.strip())
-                        laddr, lport = cells[1].split(":")
-                        raddr, rport = cells[2].split(":")
-                        state = STATES[int(cells[3], 16)]
-                        lport, rport = int(lport, 16), int(rport, 16)
-                        laddr = socket.inet_ntoa(struct.pack("<L", int(laddr, 16)))
-                        raddr = socket.inet_ntoa(struct.pack("<L", int(raddr, 16)))
-
-                        if laddr.startswith("127."):
-                            continue
-                        if state == "LISTEN":
-                            assert raddr == "0.0.0.0"
-                            listening[(cid, lport, "TCP")] = 1
-                            continue
-
-                        connections[(cid, lport, raddr, rport, "TCP")] = state
-            except FileNotFoundError:
-                # TODO: no network stack at all?
-                continue
-        await asyncio.sleep(30)
+        await poll_proc()
+        await asyncio.sleep(10)
 
 
 def process_packet(p):
     if not p.haslayer(DNS):
-        return
-    if not p.an:
         return
     a_count = p[DNS].ancount
     i = a_count + 4
@@ -118,7 +133,10 @@ def process_packet(p):
         hostname = query.decode("ascii").lower().rstrip(".")
         if hostname.endswith(".local"):
             continue
+        print(hostname, "=>", answer)
+
         reverse_lookup[answer] = hostname
+        gauge_reverse_records.set(len(reverse_lookup))
 
 
 @app.listener("before_server_start")
@@ -129,4 +147,6 @@ async def setup_db(app, loop):
     sniffer2 = AsyncSniffer(iface="lo", prn=process_packet, filter="port 53", store=False)
     sniffer2.start()
 
-app.run(host="0.0.0.0", port=3001, single_process=True, motd=False)
+if __name__ == "__main__":
+    monitor(app).expose_endpoint()
+    app.run(host="0.0.0.0", port=3001, single_process=True, motd=False)
