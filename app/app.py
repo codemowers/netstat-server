@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import asyncio
+import collections
 import struct
 import socket
 import re
@@ -13,11 +14,14 @@ from sanic_prometheus import monitor
 INTERVAL = int(os.getenv("INTERVAL", "10"))
 TTL = int(os.getenv("TTL", "60"))
 
-gauge_connections = Gauge("netstat_server_connection_count",
-    "Connection count")
-histogram_latency = Histogram("netstat_stage_latency_sec",
-    "Latency histogram",
-    ["stage"])
+gauge_host_connections = Gauge("netstat_server_host_connection_count",
+    "Host connection count",
+    ["state"])
+gauge_container_connections = Gauge("netstat_server_container_connection_count",
+    "Container connection count",
+    ["uid", "state"])
+histogram_duration = Histogram("netstat_server_scrape_duration_seconds",
+    "Latency histogram")
 
 connections = TTLCache(maxsize=100000, ttl=TTL)
 listening = TTLCache(maxsize=1000000, ttl=TTL)
@@ -63,8 +67,10 @@ async def export(request):
     return json(z)
 
 
-@histogram_latency.labels("poll-proc").time()
+@histogram_duration.time()
 async def poll_proc():
+    prev_labels = set()
+    used_labels = set()
     for j in os.listdir(PATH_PROCFS):
         await asyncio.sleep(0)
         try:
@@ -75,33 +81,50 @@ async def poll_proc():
             with open(os.path.join(PATH_PROCFS, "%d/cgroup" % pid), "r") as fh:
                 cid = parse_cgroup(fh.readline().strip())
         except FileNotFoundError:
-            # TODO: host namespace?
-            continue
+            cid = None
 
-        try:
-            with open(os.path.join(PATH_PROCFS, "%d/net/tcp" % pid), "r") as fh:
-                fh.readline()
-                for line in fh:
-                    cells = re.split(r"\s+", line.strip())
-                    laddr, lport = cells[1].split(":")
-                    raddr, rport = cells[2].split(":")
-                    state = STATES[int(cells[3], 16)]
-                    lport, rport = int(lport, 16), int(rport, 16)
-                    laddr = socket.inet_ntoa(struct.pack("<L", int(laddr, 16)))
-                    raddr = socket.inet_ntoa(struct.pack("<L", int(raddr, 16)))
+        counts = collections.Counter()
+        for proto in ("tcp", "udp"):
+            try:
+                with open(os.path.join(PATH_PROCFS, "%d/net/%s" % (pid, proto)), "r") as fh:
+                    fh.readline()
+                    for line in fh:
+                        cells = re.split(r"\s+", line.strip())
+                        laddr, lport = cells[1].split(":")
+                        raddr, rport = cells[2].split(":")
+                        state = STATES[int(cells[3], 16)]
+                        lport, rport = int(lport, 16), int(rport, 16)
+                        laddr = socket.inet_ntoa(struct.pack("<L", int(laddr, 16)))
+                        raddr = socket.inet_ntoa(struct.pack("<L", int(raddr, 16)))
 
-                    if laddr.startswith("127."):
-                        continue
-                    if state == "LISTEN":
-                        assert raddr == "0.0.0.0"
-                        listening[(cid, lport, "TCP")] = 1
-                        continue
+                        if laddr.startswith("127."):
+                            continue
+                        if raddr == "0.0.0.0":
+                            assert state in ("LISTEN", "CLOSE")
+                            listening[(cid, lport, proto.upper())] = 1
+                            continue
+                        connections[(cid, lport, raddr, rport, proto.upper())] = state
+                        counts[(cid, state)] += 1
 
-                    connections[(cid, lport, raddr, rport, "TCP")] = state
-        except FileNotFoundError:
-            # TODO: no network stack at all?
-            continue
-    gauge_connections.set(len(connections))
+            except FileNotFoundError:
+                # TODO: no network stack at all?
+                continue
+
+        used_labels = set()
+        for key, value in counts.items():
+            used_labels.add(key)
+            prev_labels.discard(key)
+            if key[0]:
+                gauge_container_connections.labels(*key).set(value)
+            else:
+                gauge_host_connections.labels(key[1]).set(value)
+
+        for key in prev_labels:
+            if key[0]:
+                gauge_container_connections.remove(*key)
+            else:
+                gauge_host_connections.remove(key[1])
+        prev_labels = used_labels
 
 
 async def poller():
