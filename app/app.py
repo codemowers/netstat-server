@@ -10,14 +10,16 @@ from sanic.response import json
 from prometheus_client import Gauge, Histogram
 from sanic_prometheus import monitor
 
+TTL = int(os.getenv("TTL", "60"))
+
 gauge_connections = Gauge("netstat_server_connection_count",
     "Connection count")
 histogram_latency = Histogram("netstat_stage_latency_sec",
     "Latency histogram",
     ["stage"])
 
-connections = TTLCache(maxsize=100000, ttl=60)
-listening = TTLCache(maxsize=1000000, ttl=60)
+connections = TTLCache(maxsize=100000, ttl=TTL)
+listening = TTLCache(maxsize=1000000, ttl=TTL)
 
 app = Sanic("netstat")
 
