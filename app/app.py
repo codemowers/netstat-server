@@ -4,7 +4,7 @@ import struct
 import socket
 import re
 import os
-from cachetools import TTLCache, LRUCache
+from cachetools import TTLCache
 from sanic import Sanic
 from sanic.response import json
 from prometheus_client import Gauge, Histogram
@@ -12,13 +12,10 @@ from sanic_prometheus import monitor
 
 gauge_connections = Gauge("netstat_server_connection_count",
     "Connection count")
-gauge_reverse_records = Gauge("netstat_server_reverse_record_count",
-    "Reverse lookup table record count")
 histogram_latency = Histogram("netstat_stage_latency_sec",
     "Latency histogram",
     ["stage"])
 
-reverse_lookup = LRUCache(maxsize=10000)
 connections = TTLCache(maxsize=100000, ttl=60)
 listening = TTLCache(maxsize=1000000, ttl=60)
 
@@ -42,11 +39,6 @@ STATES = {
 PATH_PROCFS = os.getenv("PATH_PROCFS", "/proc")
 
 
-@app.get("/reverse")
-async def reverse_lookup_table(request):
-    return json(dict(reverse_lookup))
-
-
 def parse_cgroup(first_line):
     _, remainder = first_line.rsplit("/", 1)
 
@@ -62,7 +54,6 @@ def parse_cgroup(first_line):
 @app.get("/export")
 async def export(request):
     z = {
-        "reverse": dict(reverse_lookup),
         "connections": [(k[0], k[1], k[2], k[3], k[4], v) for k, v in connections.items()],
         "listening": [(k[0], k[1], k[2]) for k, v in listening.items()],
     }
