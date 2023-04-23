@@ -10,6 +10,7 @@ from sanic.response import json
 from prometheus_client import Gauge, Histogram
 from sanic_prometheus import monitor
 
+INTERVAL = int(os.getenv("INTERVAL", "10"))
 TTL = int(os.getenv("TTL", "60"))
 
 gauge_connections = Gauge("netstat_server_connection_count",
@@ -106,7 +107,7 @@ async def poll_proc():
 async def poller():
     while True:
         await poll_proc()
-        await asyncio.sleep(10)
+        await asyncio.sleep(INTERVAL)
 
 
 @app.listener("before_server_start")
